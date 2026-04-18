@@ -17,7 +17,12 @@ from ai_subtitle.config import (
     read_config_values,
     save_config_values,
 )
-from ai_subtitle.game_ocr import GameOCRTranslator, ScreenRegion
+from ai_subtitle.game_ocr import (
+    GalgameOCRTranslator,
+    GalgameTranslationEvent,
+    GameOCRTranslator,
+    ScreenRegion,
+)
 from ai_subtitle.overlay import OverlayWindow
 from ai_subtitle.providers.openai_compatible import OpenAICompatibleProvider
 from ai_subtitle.transcribe import resolve_transcription_settings, transcribe_media_to_srt
@@ -439,6 +444,9 @@ class SubtitleTranslatorGUI:
         self._game_translator: Optional[GameOCRTranslator] = None
         self._overlay: Optional[OverlayWindow] = None
         self._stopping_game_ocr = False
+        self._galgame_translator: Optional[GalgameOCRTranslator] = None
+        self._galgame_overlay: Optional[OverlayWindow] = None
+        self._stopping_galgame_ocr = False
 
         self.base_url_var = tk.StringVar()
         self.api_key_var = tk.StringVar()
@@ -465,6 +473,15 @@ class SubtitleTranslatorGUI:
         self.game_similarity_var = tk.StringVar(value="0.92")
         self.game_min_display_var = tk.StringVar(value="2.2")
         self.game_max_display_var = tk.StringVar(value="5.5")
+        self.galgame_dialogue_region_var = tk.StringVar(value="200,780,1520,220")
+        self.galgame_name_region_var = tk.StringVar(value="")
+        self.galgame_target_var = tk.StringVar(value="Simplified Chinese")
+        self.galgame_interval_var = tk.StringVar(value="0.45")
+        self.galgame_similarity_var = tk.StringVar(value="0.96")
+        self.galgame_stable_passes_var = tk.StringVar(value="2")
+        self.galgame_min_chars_var = tk.StringVar(value="2")
+        self.galgame_min_display_var = tk.StringVar(value="2.4")
+        self.galgame_max_display_var = tk.StringVar(value="7.0")
 
         self.status_var = tk.StringVar(value="Ready")
         self.config_source_var = tk.StringVar(value="Config source: unresolved")
@@ -477,6 +494,7 @@ class SubtitleTranslatorGUI:
         self._task_animation: Optional[PixelRiderAnimation] = None
         self._main_canvas: Optional[tk.Canvas] = None
         self._scroll_frame: Optional[ttk.Frame] = None
+        self._galgame_history_text: Optional[ScrolledText] = None
 
         self._configure_style()
         self._build_layout()
@@ -567,10 +585,13 @@ class SubtitleTranslatorGUI:
 
         video_tab = ttk.Frame(notebook, padding=16, style="App.TFrame")
         game_tab = ttk.Frame(notebook, padding=16, style="App.TFrame")
+        galgame_tab = ttk.Frame(notebook, padding=16, style="App.TFrame")
         notebook.add(video_tab, text="Video Subtitle")
+        notebook.add(galgame_tab, text="Galgame")
         notebook.add(game_tab, text="Game OCR")
 
         self._build_video_tab(video_tab)
+        self._build_galgame_tab(galgame_tab)
         self._build_game_tab(game_tab)
 
         log_frame = ttk.LabelFrame(outer, text="Activity", padding=12, style="Card.TLabelframe")
@@ -792,6 +813,56 @@ class SubtitleTranslatorGUI:
         actions.grid(row=4, column=0, columnspan=4, sticky="w", pady=(14, 0))
         ttk.Button(actions, text="Start OCR", style="Accent.TButton", command=self._start_game_ocr).pack(side="left")
         ttk.Button(actions, text="Stop OCR", command=self._stop_game_ocr).pack(side="left", padx=(8, 0))
+
+    def _build_galgame_tab(self, parent: ttk.Frame) -> None:
+        frame = ttk.LabelFrame(parent, text="Galgame Real-Time OCR Translation", padding=12, style="Card.TLabelframe")
+        frame.pack(fill="x", anchor="n")
+
+        self._add_labeled_entry(frame, "Dialogue Region", self.galgame_dialogue_region_var, row=0, width=28)
+        self._add_labeled_entry(frame, "Name Region", self.galgame_name_region_var, row=0, column=2, width=24)
+        self._add_labeled_entry(frame, "Target Language", self.galgame_target_var, row=1, width=18)
+        self._add_labeled_entry(frame, "Interval", self.galgame_interval_var, row=1, column=2, width=10)
+        self._add_labeled_entry(frame, "Similarity", self.galgame_similarity_var, row=2, width=10)
+        self._add_labeled_entry(frame, "Stable Passes", self.galgame_stable_passes_var, row=2, column=2, width=10)
+        self._add_labeled_entry(frame, "Min Chars", self.galgame_min_chars_var, row=3, width=10)
+        self._add_labeled_entry(frame, "Min Display", self.galgame_min_display_var, row=3, column=2, width=10)
+        self._add_labeled_entry(frame, "Max Display", self.galgame_max_display_var, row=4, width=10)
+
+        tip = tk.Label(
+            frame,
+            text=(
+                "Dialogue Region is required. Name Region is optional. "
+                "Stable Passes waits for the same line to stay visible before translation, "
+                "which works better for letter-by-letter galgame text."
+            ),
+            bg="#f3efe7",
+            fg="#6c6059",
+            font=("Segoe UI", 10),
+            wraplength=900,
+            justify="left",
+        )
+        tip.grid(row=5, column=0, columnspan=4, sticky="w", pady=(10, 0))
+
+        actions = ttk.Frame(frame, style="App.TFrame")
+        actions.grid(row=6, column=0, columnspan=4, sticky="w", pady=(14, 0))
+        ttk.Button(actions, text="Start Galgame OCR", style="Accent.TButton", command=self._start_galgame_ocr).pack(side="left")
+        ttk.Button(actions, text="Stop Galgame OCR", command=self._stop_galgame_ocr).pack(side="left", padx=(8, 0))
+        ttk.Button(actions, text="Clear History", command=self._clear_galgame_history).pack(side="left", padx=(8, 0))
+
+        history_frame = ttk.LabelFrame(parent, text="Galgame History", padding=12, style="Card.TLabelframe")
+        history_frame.pack(fill="both", expand=True, anchor="n", pady=(16, 0))
+
+        self._galgame_history_text = ScrolledText(
+            history_frame,
+            height=16,
+            bg="#1f1a17",
+            fg="#f7f1eb",
+            insertbackground="#f7f1eb",
+            relief="flat",
+            font=("Consolas", 10),
+        )
+        self._galgame_history_text.pack(fill="both", expand=True)
+        self._galgame_history_text.configure(state="disabled")
 
     def _add_labeled_entry(
         self,
@@ -1089,6 +1160,9 @@ class SubtitleTranslatorGUI:
         self._set_status_from_thread("Transcription finished")
 
     def _start_game_ocr(self) -> None:
+        if self._galgame_translator is not None and self._galgame_translator.is_running:
+            self._show_error("Galgame OCR already running", "Stop the current galgame OCR session first.")
+            return
         if self._game_translator is not None and self._game_translator.is_running:
             self._show_error("OCR already running", "Stop the current OCR session before starting a new one.")
             return
@@ -1140,6 +1214,79 @@ class SubtitleTranslatorGUI:
         self._set_status("Game OCR stopped")
         self._log("Game OCR stopped")
 
+    def _start_galgame_ocr(self) -> None:
+        if self._game_translator is not None and self._game_translator.is_running:
+            self._show_error("Game OCR already running", "Stop the current game OCR session first.")
+            return
+        if self._galgame_translator is not None and self._galgame_translator.is_running:
+            self._show_error("Galgame OCR already running", "Stop the current galgame OCR session first.")
+            return
+
+        try:
+            provider = OpenAICompatibleProvider(self._build_config_from_form())
+            dialogue_region = self._parse_region(self.galgame_dialogue_region_var.get().strip())
+            name_region_text = self.galgame_name_region_var.get().strip()
+            name_region = self._parse_region(name_region_text) if name_region_text else None
+            interval = float(self.galgame_interval_var.get().strip())
+            similarity = float(self.galgame_similarity_var.get().strip())
+            stable_passes = int(self.galgame_stable_passes_var.get().strip())
+            min_chars = int(self.galgame_min_chars_var.get().strip())
+            min_display = float(self.galgame_min_display_var.get().strip())
+            max_display = float(self.galgame_max_display_var.get().strip())
+            if stable_passes <= 0:
+                raise ValueError("Stable Passes must be greater than 0.")
+            if min_chars <= 0:
+                raise ValueError("Min Chars must be greater than 0.")
+            if min_display <= 0 or max_display <= 0:
+                raise ValueError("Display duration values must be positive.")
+            if min_display > max_display:
+                raise ValueError("Min Display cannot be greater than Max Display.")
+
+            self._galgame_overlay = OverlayWindow(self.root, on_close=self._handle_galgame_overlay_close)
+            self._galgame_translator = GalgameOCRTranslator(
+                provider=provider,
+                target_language=self.galgame_target_var.get().strip() or "Simplified Chinese",
+                dialogue_region=dialogue_region,
+                name_region=name_region,
+                interval_seconds=interval,
+                similarity_threshold=similarity,
+                stable_passes=stable_passes,
+                min_chars=min_chars,
+                min_display_seconds=min_display,
+                max_display_seconds=max_display,
+                status_callback=self._log_galgame_status_from_thread,
+                result_callback=self._handle_galgame_event_from_thread,
+            )
+            self._galgame_translator.start(self._galgame_overlay)
+        except Exception as exc:
+            self._cleanup_galgame_ocr()
+            self._show_error("Failed to start galgame OCR", str(exc))
+            return
+
+        self._set_status("Galgame OCR is running")
+        self._log("Galgame OCR started")
+
+    def _stop_galgame_ocr(self) -> None:
+        if self._galgame_translator is None and self._galgame_overlay is None:
+            return
+
+        self._stopping_galgame_ocr = True
+        try:
+            if self._galgame_translator is not None:
+                self._galgame_translator.stop()
+            if self._galgame_overlay is not None:
+                self._galgame_overlay.close()
+        finally:
+            self._cleanup_galgame_ocr()
+            self._stopping_galgame_ocr = False
+        self._set_status("Galgame OCR stopped")
+        self._log("Galgame OCR stopped")
+
+    def _handle_galgame_overlay_close(self) -> None:
+        if self._stopping_galgame_ocr:
+            return
+        self._stop_galgame_ocr()
+
     def _handle_overlay_close(self) -> None:
         if self._stopping_game_ocr:
             return
@@ -1148,6 +1295,49 @@ class SubtitleTranslatorGUI:
     def _cleanup_game_ocr(self) -> None:
         self._game_translator = None
         self._overlay = None
+
+    def _cleanup_galgame_ocr(self) -> None:
+        self._galgame_translator = None
+        self._galgame_overlay = None
+
+    def _log_galgame_status_from_thread(self, message: str) -> None:
+        self.root.after(0, lambda: self._log(f"[Galgame] {message}"))
+
+    def _handle_galgame_event_from_thread(self, event: GalgameTranslationEvent) -> None:
+        self.root.after(0, lambda: self._append_galgame_history(event))
+
+    def _append_galgame_history(self, event: GalgameTranslationEvent) -> None:
+        if self._galgame_history_text is None:
+            return
+
+        header = "[cached]" if event.cached else "[new]"
+        lines = [header]
+        if event.speaker:
+            lines.append(f"Name: {event.speaker}")
+        lines.append("Source:")
+        lines.append(event.source_text)
+        lines.append("Translation:")
+        lines.append(event.translated_text)
+        lines.append("")
+        block = "\n".join(lines)
+
+        self._galgame_history_text.configure(state="normal")
+        self._galgame_history_text.insert("end", block + "\n")
+        self._galgame_history_text.see("end")
+        self._galgame_history_text.configure(state="disabled")
+        self._log(
+            "Galgame history updated"
+            + (f" for {event.speaker}" if event.speaker else "")
+            + (" (cache hit)" if event.cached else "")
+        )
+
+    def _clear_galgame_history(self) -> None:
+        if self._galgame_history_text is None:
+            return
+        self._galgame_history_text.configure(state="normal")
+        self._galgame_history_text.delete("1.0", "end")
+        self._galgame_history_text.configure(state="disabled")
+        self._log("Galgame history cleared")
 
     def _build_config_from_form(self):
         return build_config(
@@ -1369,6 +1559,8 @@ class SubtitleTranslatorGUI:
             self._log("Task failed.")
 
     def _on_close(self) -> None:
+        if self._galgame_translator is not None and self._galgame_translator.is_running:
+            self._stop_galgame_ocr()
         if self._game_translator is not None and self._game_translator.is_running:
             self._stop_game_ocr()
         self.root.destroy()

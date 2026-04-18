@@ -12,6 +12,7 @@ A Windows-focused desktop tool for:
 - Recognition profiles for balanced, higher quality, or noisy scenes
 - Optional local audio cleanup before transcription for crowded or messy audio
 - OpenAI-compatible subtitle translation API
+- Dedicated galgame OCR mode with dialogue stabilization, optional speaker-name region, cache, and history
 - Real-time OCR translation overlay for games
 - GUI workflow for daily use
 - Windows batch launcher
@@ -89,6 +90,13 @@ Recognition profiles:
 - Set the subtitle region
 - Start OCR translation
 - Read translated text from the overlay window
+
+### 4. Galgame OCR
+
+- Set the main dialogue box region
+- Optionally set a separate speaker name region
+- Tune `Stable Passes` so the app waits for the sentence to finish typing
+- Review translated lines in the built-in history panel
 
 ## Whisper Models
 
